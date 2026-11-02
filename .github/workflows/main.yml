@@ -1,0 +1,73 @@
+name: Veera Universal Live Stream with Logo
+
+on:
+  workflow_dispatch:
+    inputs:
+      media_url:
+        description: 'Google Drive அல்லது YouTube Video Link-ஐ இங்கே பேஸ்ட் செய்யவும்'
+        required: true
+        default: 'https://drive.google.com/file/d/1WEu_-Z84_a8jXSsRaL_KBFgiJOTXbqp7/view?usp=drivesdk'
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies (FFmpeg, Python, yt-dlp, gdown)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg python3-pip
+          pip3 install --upgrade pip
+          pip3 install yt-dlp gdown
+
+      - name: Download Video and Logo from Google Drive
+        run: |
+          # 1. லைவ் செய்ய வேண்டிய வீடியோவை டவுன்லோட் செய்தல்
+          URL="${{ github.event.inputs.media_url }}"
+          echo "Processing Video URL: $URL"
+
+          if [[ "$URL" == *"drive.google.com"* ]]; then
+            echo "Google Drive வீடியோ லிங்க் கண்டுபிடிக்கப்பட்டது..."
+            VIDEO_ID=$(echo "$URL" | grep -oP '(?<=/d/)[^/]+' || echo "$URL" | grep -oP '(?<=id=)[^&]+')
+            gdown "https://drive.google.com/uc?id=${VIDEO_ID}" -O "video.mp4" || \
+            gdown "https://drive.google.com/uc?export=download&id=${VIDEO_ID}" -O "video.mp4"
+          else
+            echo "YouTube / பிற தள லிங்க் கண்டுபிடிக்கப்பட்டது..."
+            yt-dlp -f "best[ext=mp4]/best" -o "video.mp4" "$URL"
+          fi
+
+          # 2. நிரந்தர லோகோவை Google Drive-லிருந்து டவுன்லோட் செய்தல்
+          echo "நிரந்தர லோகோ டவுன்லோட் செய்யப்படுகிறது..."
+          LOGO_ID="1WEu_-Z84_a8jXSsRaL_KBFgiJOTXbqp7"
+          gdown "https://drive.google.com/uc?id=${LOGO_ID}" -O "logo.png" || \
+          gdown "https://drive.google.com/uc?export=download&id=${LOGO_ID}" -O "logo.png"
+
+          # கோப்புகள் சரியாக டவுன்லோட் ஆகியுள்ளதா என சோதித்தல்
+          if [ ! -f "video.mp4" ] || [ ! -s "video.mp4" ]; then
+            echo "பிழை: வீடியோ டவுன்லோட் ஆகவில்லை!"
+            exit 1
+          fi
+
+          if [ ! -f "logo.png" ] || [ ! -s "logo.png" ]; then
+            echo "பிழை: லோகோ டவுன்லோட் ஆகவில்லை!"
+            exit 1
+          fi
+
+      - name: Start YouTube Live Stream with Medium Size Logo Overlay
+        run: |
+          STREAM_KEY="${{ secrets.YOUTUBE_STREAM_KEY }}"
+          STREAM_URL="rtmp://a.rtmp.youtube.com/live2"
+
+          echo "FFmpeg மூலம் நடுத்தர அளவு லோகோவுடன் லைவ் ஸ்ட்ரீமிங் தொடங்குகிறது..."
+          
+          # scale=120:-1 மூலம் லோகோ மீடியம் சைஸில் கார்னரில் மிகச் சரியாகப் பொருந்தும்
+          ffmpeg -re \
+          -stream_loop -1 -i video.mp4 \
+          -i logo.png \
+          -filter_complex "[1:v]scale=120:-1[logo];[0:v][logo]overlay=W-w-25:25" \
+          -c:v libx264 -preset ultrafast -b:v 2500k -maxrate 2500k -bufsize 5000k \
+          -pix_fmt yuv420p -g 60 \
+          -c:a aac -b:a 128k -ar 44100 \
+          -f flv "$STREAM_URL/$STREAM_KEY"
